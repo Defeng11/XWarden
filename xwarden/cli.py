@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from .config import Config
@@ -9,8 +10,40 @@ from .monitor_bb import fetch_profile
 from .notifier import make_notifiers, notify_all
 from .storage import Storage
 
+LOG_PATH = os.path.expanduser("~/.xwarden/xwarden.log")
+
+
+class _Tee:
+    """Tee stdout: write to both console and log file."""
+
+    def __init__(self, *files):
+        self.files = files
+
+    def write(self, data):
+        for f in self.files:
+            f.write(data)
+
+    def flush(self):
+        for f in self.files:
+            f.flush()
+
 
 def main() -> int:
+    # ── Logging setup ───────────────────────────────────────────────────
+    os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+    log_file = open(LOG_PATH, "w", encoding="utf-8")
+    log_file.write(f"=== XWarden run at {__import__('datetime').datetime.now():%Y-%m-%d %H:%M:%S} ===\n")
+    log_file.flush()
+    sys.stdout = _Tee(sys.__stdout__, log_file)
+
+    try:
+        return _run()
+    finally:
+        sys.stdout = sys.__stdout__
+        log_file.close()
+
+
+def _run() -> int:
     cfg = Config.load()
 
     if not cfg.active_channels:

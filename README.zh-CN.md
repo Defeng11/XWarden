@@ -1,3 +1,9 @@
+<p align="right">
+  <a href="README.md">🇬🇧 English</a>
+  |
+  <a href="README.zh-CN.md">🇨🇳 中文</a>
+</p>
+
 # XWarden 🦞
 
 > 监控 X/Twitter 账号 — 自动 LLM 翻译 — 推送到手机。

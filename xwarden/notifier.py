@@ -74,9 +74,12 @@ class LLMTranslator:
                     "role": "system",
                     "content": (
                         f"You are a professional translator. Translate the following English text "
-                        f"to {lang_name}. Preserve financial/technical jargon, tickers ($TSLA, etc.), "
-                        f"numbers, and percentages exactly as-is. Return ONLY the translation, "
-                        f"no explanations, no greetings, no markdown formatting."
+                        f"to {lang_name}. Observe these rules:\n"
+                        f"1. Translate ONLY what is written — do NOT add details, names, or facts not present in the source.\n"
+                        f"2. Preserve financial/technical jargon, tickers ($TSLA, etc.), numbers, percentages, and URLs exactly as-is.\n"
+                        f"3. If the source text contains garbled/unreadable characters, translate the readable parts and mark unreadable parts as [原文乱码].\n"
+                        f"4. Never invent company names, contract details, or specific figures.\n"
+                        f"5. Return ONLY the translation, no explanations, no greetings, no markdown formatting."
                     ),
                 },
                 {"role": "user", "content": text},

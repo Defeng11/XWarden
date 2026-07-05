@@ -15,7 +15,7 @@
 ## 工作原理
 
 ```
-[X/Twitter] ──bb-browser──→ [Following API]
+[X/Twitter] ──bb-browser──→ [用户推文 API]
        │                          │
        │                   ┌──────┘
        │                   ▼
@@ -36,7 +36,7 @@
 
 **关键技术决策：**
 
-1. **bb-browser 替代 Playwright/nodriver** — X 用 Cloudflare 拦截无头浏览器。`bb-browser` 通过 CDP 连接真实 Chrome，绕过反爬检测，且 `twitter/following` API 避开了 X 搜索 GraphQL 接口废弃的问题。
+1. **bb-browser 替代 Playwright/nodriver** — X 用 Cloudflare 拦截无头浏览器。`bb-browser` 通过 CDP 连接真实 Chrome，绕过反爬检测。
 2. **LLM 翻译替代 Google 爬虫** — Google 免费翻译将长文本切段后丢失上下文。LLM（MiniMax / DeepSeek）保留完整语义，金融术语和俚语翻译准确。
 3. **双后端自动降级** — 主翻译提供商标额用尽或被限流时，自动切换到备用后端，不中断服务。
 

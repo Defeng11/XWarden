@@ -15,7 +15,7 @@
 ## How It Works
 
 ```
-[X/Twitter] ──bb-browser──→ [Following API]
+[X/Twitter] ──bb-browser──→ [User Tweets API]
        │                          │
        │                   ┌──────┘
        │                   ▼
@@ -36,7 +36,7 @@
 
 **Key decisions:**
 
-1. **bb-browser over Playwright/nodriver** — X blocks headless browsers with Cloudflare. `bb-browser` uses a real Chrome via CDP, bypasses anti-bot detection, and the `twitter/following` API avoids X's search-graphql deprecation issues.
+1. **bb-browser over Playwright/nodriver** — X blocks headless browsers with Cloudflare. `bb-browser` uses a real Chrome via CDP and bypasses anti-bot detection.
 2. **LLM translation over Google Translate scraper** — Google's free scraper loses context when splitting long text into chunks. LLM (MiniMax / DeepSeek) keeps full context, handles financial jargon and slang correctly.
 3. **Dual-backend auto-fallback** — If the primary translation provider hits rate limits or quota exhaustion, the secondary provider takes over automatically.
 

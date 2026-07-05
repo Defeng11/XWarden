@@ -1,0 +1,22 @@
+# State
+tweets_seen.json
+data/
+*.log
+
+# Env
+.env
+.env.local
+
+# Browser profile (persistent context)
+.xwarden_profile/
+.xwarden_profile_logged_in
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/

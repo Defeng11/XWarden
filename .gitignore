@@ -1,6 +1,7 @@
 # State
 tweets_seen.json
 data/
+logs/
 *.log
 
 # Env

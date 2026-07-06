@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from .config import Config
 from .monitor_bb import fetch_profile
 from .notifier import make_notifiers, notify_all
 from .storage import Storage
 
-LOG_PATH = os.path.expanduser("~/.xwarden/xwarden.log")
+# 日志放到项目目录下 logs/ 子目录, 跟项目走 (不污染 home).
+# .gitignore 已排除 logs/, 不会上传到 GitHub.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOG_PATH = str(_PROJECT_ROOT / "logs" / "xwarden.log")
 
 
 class _Tee:

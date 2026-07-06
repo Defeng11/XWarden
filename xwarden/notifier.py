@@ -9,6 +9,8 @@ Switch by changing TRANSLATE_MODEL in .env.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Sequence
 from urllib.parse import quote
 
@@ -24,6 +26,76 @@ _TIMEOUT = 30
 # Bark GET URL path: key/title/body?group=... URL length ~2000 max.
 # Safe limit: 600 bytes for the body segment after encoding + overhead.
 BARK_URL_MAX = 600
+
+
+# ── LLM reasoning-leak guards ────────────────────────────────────────────────
+# 部分推理模型 (DeepSeek-R1, MiniMax-M2.7 等) 会把内部思考以 <think>...</think>
+# 或裸 "The user wants me / Let me go through" 形式塞进 content, 必须清洗.
+
+_THINK_PATTERNS = [
+    re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<analysis>.*?</analysis>', re.DOTALL | re.IGNORECASE),
+    re.compile(r'<think>.*$', re.DOTALL | re.IGNORECASE),  # 未闭合的 think 块
+]
+
+_COT_LEAK_PATTERNS = [
+    re.compile(r'^The user wants me.*?(?=\n\n|$)', re.IGNORECASE | re.DOTALL),
+    re.compile(r'^Let me go through.*?(?=\n\n|$)', re.IGNORECASE | re.DOTALL),
+    re.compile(r'^We need to.*?(?=\n\n|$)', re.IGNORECASE | re.DOTALL),
+    re.compile(r'^Looking at the source text.*?(?=\n\n|$)', re.IGNORECASE | re.DOTALL),
+    re.compile(r'^I need to translate.*?(?=\n\n|$)', re.IGNORECASE | re.DOTALL),
+]
+
+# 推送前硬校验: 包含这些模式 = 绝对禁止推送
+_BLOCK_PATTERNS = [
+    re.compile(r'<think>', re.IGNORECASE),
+    re.compile(r'The user wants me', re.IGNORECASE),
+    re.compile(r'Let me go through', re.IGNORECASE),
+    re.compile(r'Looking at the source text', re.IGNORECASE),
+    re.compile(r'\{"translated_text"\s*:', re.IGNORECASE),  # JSON 包装字面泄漏
+]
+
+
+def _extract_translated_text(content: str) -> str | None:
+    """从可能含 prose 包装的 LLM 输出中提取 translated_text 字段.
+
+    LLM 有时会在 JSON 外加一些解释文字, 例如:
+        "Here is the translation:\n\n{\"translated_text\": \"...\"}"
+    不用 raw_decode 就会被 wrapper prose 干扰, json.loads 失败.
+    """
+    idx = content.find("{")
+    if idx < 0:
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        parsed, _ = decoder.raw_decode(content[idx:])
+        if isinstance(parsed, dict):
+            val = parsed.get("translated_text")
+            if isinstance(val, str):
+                return val.strip()
+    except json.JSONDecodeError:
+        pass
+    return None
+
+
+def _clean_translation(text: str) -> str:
+    """Strip LLM reasoning leakage from translation output (think + CoT + JSON wrapper)."""
+    cleaned = text
+    for pat in _THINK_PATTERNS + _COT_LEAK_PATTERNS:
+        cleaned = pat.sub('', cleaned)
+    # 剥 {"translated_text": " ... "} 包装 (如果 LLM 没正确生成 JSON 但字面写了出来)
+    cleaned = re.sub(r'^\s*\{\s*"translated_text"\s*:\s*"?', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'"?\s*\}\s*$', '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip().strip('"').strip(',').strip()
+    return cleaned.strip()
+
+
+def _is_translation_safe(text: str) -> bool:
+    """推送前校验: 返回 False 表示含泄漏特征, 禁止推送."""
+    for pat in _BLOCK_PATTERNS:
+        if pat.search(text):
+            return False
+    return True
 
 
 # ── LLM Translation ──────────────────────────────────────────────────────────
@@ -79,7 +151,10 @@ class LLMTranslator:
                         f"2. Preserve financial/technical jargon, tickers ($TSLA, etc.), numbers, percentages, and URLs exactly as-is.\n"
                         f"3. If the source text contains garbled/unreadable characters, translate the readable parts and mark unreadable parts as [原文乱码].\n"
                         f"4. Never invent company names, contract details, or specific figures.\n"
-                        f"5. Return ONLY the translation, no explanations, no greetings, no markdown formatting."
+                        f"5. CRITICAL: Return ONLY a JSON object of the form "
+                        f'{{"translated_text": "<your translation>"}}. '
+                        f"Do NOT include any thinking, analysis, chain-of-thought, commentary, or "
+                        f"markdown code fences. Do NOT write anything before or after the JSON."
                     ),
                 },
                 {"role": "user", "content": text},
@@ -115,6 +190,15 @@ class LLMTranslator:
 
         # Both providers return OpenAI-compatible response
         content = data["choices"][0]["message"]["content"].strip()
+
+        # 1) 尝试 JSON 提取 — 从第一个 { 开始 raw_decode, 跳过前置 prose
+        parsed_text = _extract_translated_text(content)
+        if parsed_text is not None:
+            content = parsed_text
+
+        # 2) regex 清洗: 强剥 <think> / <analysis> / CoT / {"translated_text": 残留
+        content = _clean_translation(content)
+
         return content
 
 
@@ -195,7 +279,12 @@ def _maybe_translate(text: str, translator: LLMTranslator | None, fallback: LLMT
         return "\n\n".join(t.translate(c) for c in chunks)
 
     try:
-        return _do_translate(translator)
+        result = _do_translate(translator)
+        # 推送前硬校验: 含 reasoning 泄漏特征 = 拒绝, 回退原文 (不推脏数据)
+        if not _is_translation_safe(result):
+            print(f"  [!] {translator.provider} translation contains leaked reasoning, falling back to original")
+            return text
+        return result
     except Exception as e:
         err_msg = str(e).lower()
         # Fallback triggers: quota exhausted, rate limited, 429, 2056
@@ -203,7 +292,11 @@ def _maybe_translate(text: str, translator: LLMTranslator | None, fallback: LLMT
         if fallback is not None and should_fallback:
             print(f"  [!] {translator.provider} quota/rate-limited, falling back to {fallback.provider}")
             try:
-                return _do_translate(fallback)
+                result = _do_translate(fallback)
+                if not _is_translation_safe(result):
+                    print(f"  [!] {fallback.provider} translation also contains leaked reasoning, falling back to original")
+                    return text
+                return result
             except Exception as e2:
                 print(f"  [!] Fallback also failed: {e2}")
                 return f"{text}\n\n[翻译失败: {e2}]"

@@ -32,6 +32,9 @@
        │     Bark  Telegram  Feishu
        ▼     └─────────────────────┘
     Your Phone
+       │
+       ▼
+  [Kill XWarden-managed Chrome on exit]   ← your own Chrome is never touched
 ```
 
 **Key decisions:**
@@ -39,6 +42,7 @@
 1. **bb-browser over Playwright/nodriver** — X blocks headless browsers with Cloudflare. `bb-browser` uses a real Chrome via CDP and bypasses anti-bot detection.
 2. **LLM translation over Google Translate scraper** — Google's free scraper loses context when splitting long text into chunks. LLM (MiniMax / DeepSeek) keeps full context, handles financial jargon and slang correctly.
 3. **Dual-backend auto-fallback** — If the primary translation provider hits rate limits or quota exhaustion, the secondary provider takes over automatically.
+4. **Managed Chrome killed on exit** — XWarden launches Chrome under its own user-data dir (`~/.bb-browser/browser/user-data`) and force-kills those processes at the end of each run. Your personal Chrome (different profile) is never touched. Run logs go to `logs/xwarden.log`.
 
 ---
 

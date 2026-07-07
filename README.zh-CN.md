@@ -32,6 +32,9 @@
        │     Bark  Telegram  飞书
        ▼     └─────────────────────┘
     你的手机
+       │
+       ▼
+  [退出时杀掉 XWarden 启动的 Chrome]   ← 你自己用的 Chrome 不会被碰
 ```
 
 **关键技术决策：**
@@ -39,6 +42,7 @@
 1. **bb-browser 替代 Playwright/nodriver** — X 用 Cloudflare 拦截无头浏览器。`bb-browser` 通过 CDP 连接真实 Chrome，绕过反爬检测。
 2. **LLM 翻译替代 Google 爬虫** — Google 免费翻译将长文本切段后丢失上下文。LLM（MiniMax / DeepSeek）保留完整语义，金融术语和俚语翻译准确。
 3. **双后端自动降级** — 主翻译提供商标额用尽或被限流时，自动切换到备用后端，不中断服务。
+4. **退出时清理 XWarden 自己的 Chrome** — XWarden 用专属 profile (`~/.bb-browser/browser/user-data`) 启 Chrome，跑完即强杀；你日常用的 Chrome 走另一个 profile，绝不被影响。运行日志写到 `logs/xwarden.log`。
 
 ---
 

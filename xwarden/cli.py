@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .config import Config
-from .monitor_bb import fetch_profile
+from .monitor_bb import fetch_profile, _get_managed_chrome_pids, _kill_chrome_pids
 from .notifier import make_notifiers, notify_all
 from .storage import Storage
 
@@ -30,6 +30,13 @@ class _Tee:
     def flush(self):
         for f in self.files:
             f.flush()
+
+    @property
+    def encoding(self):
+        # Forward to the first wrapped stream (typically the real console)
+        # so callers like `sys.stdout.encoding` still work after the swap.
+        first = self.files[0] if self.files else None
+        return getattr(first, "encoding", None) or "utf-8"
 
 
 def main() -> int:
@@ -59,27 +66,34 @@ def _run() -> int:
     print(f"[i] XWarden: watching @{cfg.user}")
 
     try:
-        tweets = fetch_profile(cfg.user, cfg.limit)
-    except Exception as e:
-        print(f"[!] Fetch failed: {e}")
-        return 2
+        try:
+            tweets = fetch_profile(cfg.user, cfg.limit)
+        except Exception as e:
+            print(f"[!] Fetch failed: {e}")
+            return 2
 
-    storage = Storage()
-    new = [t for t in tweets if storage.is_new(t)]
+        storage = Storage()
+        new = [t for t in tweets if storage.is_new(t)]
 
-    if not new:
-        print(f"[i] No new tweets (scanned {len(tweets)}, all known).")
+        if not new:
+            print(f"[i] No new tweets (scanned {len(tweets)}, all known).")
+            return 0
+
+        print(f"[!] {len(new)} new tweet(s)")
+        notifiers = make_notifiers(cfg)
+        texts = [t["text"] for t in new]
+        urls = [t["url"] for t in new]
+        notify_all(notifiers, cfg=cfg, raw_texts=texts, urls=urls)
+
+        storage.add_many(new)
+        storage.save()
         return 0
-
-    print(f"[!] {len(new)} new tweet(s)")
-    notifiers = make_notifiers(cfg)
-    texts = [t["text"] for t in new]
-    urls = [t["url"] for t in new]
-    notify_all(notifiers, cfg=cfg, raw_texts=texts, urls=urls)
-
-    storage.add_many(new)
-    storage.save()
-    return 0
+    finally:
+        # 干掉 XWarden 启动的 managed Chrome, 不影响用户自己的 Chrome
+        chrome_pids = _get_managed_chrome_pids()
+        if chrome_pids:
+            print(f"[i] XWarden-managed Chrome PIDs (will kill): {sorted(chrome_pids)}")
+            _kill_chrome_pids(chrome_pids)
 
 
 if __name__ == "__main__":

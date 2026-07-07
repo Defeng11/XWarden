@@ -60,7 +60,8 @@ def _daemon_json_exists() -> bool:
     return os.path.exists(DAEMON_JSON)
 
 
-def _daemon_port_is_listening() -> bool:
+def _port_listening_pids(port: int) -> set[str]:
+    """Return PIDs in LISTENING state on `port` (strict match, no false positives like :198240)."""
     r = subprocess.run(
         ["netstat", "-ano"],
         capture_output=True,
@@ -68,34 +69,38 @@ def _daemon_port_is_listening() -> bool:
         errors="replace",
         timeout=10,
     )
-    return any(f":{DAEMON_PORT}" in line and "LISTENING" in line for line in r.stdout.splitlines())
+    # Local address column looks like: "127.0.0.1:19824" or "[::]:19824"
+    pattern = re.compile(rf"(?:^|\s)(?:\[[^\]]+\]|[\d.]+):{port}\s+\S+\s+LISTENING\s+(\d+)\s*$")
+    return {m.group(1) for m in pattern.finditer(r.stdout)}
+
+
+def _daemon_port_is_listening() -> bool:
+    return bool(_port_listening_pids(DAEMON_PORT))
 
 
 def _kill_stale_daemon_port_owner():
-    """Kill a stale bb-browser daemon process that still owns the daemon port."""
-    r = subprocess.run(
-        ["netstat", "-ano"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=10,
-    )
-    pids: set[str] = set()
-    for line in r.stdout.splitlines():
-        if f":{DAEMON_PORT}" not in line or "LISTENING" not in line:
-            continue
-        parts = re.split(r"\s+", line.strip())
-        if parts:
-            pids.add(parts[-1])
+    """Kill any process holding the bb-browser daemon port.
 
-    for pid in pids:
-        subprocess.run(
-            ["taskkill", "/PID", pid, "/F"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=10,
-        )
+    Uses /F /T to take down the whole tree (daemon may spawn child node procs).
+    Re-scans up to 3 rounds in case a parent respawns before the port is released.
+    Returns True if the port is freed within the budget, False otherwise.
+    """
+    for _ in range(3):
+        pids = _port_listening_pids(DAEMON_PORT)
+        if not pids:
+            return True
+        for pid in pids:
+            r = subprocess.run(
+                ["taskkill", "/PID", pid, "/F", "/T"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=10,
+            )
+            rc_line = (r.stdout or r.stderr or "").strip().splitlines()[-1] if (r.stdout or r.stderr) else ""
+            print(f"[i] taskkill /PID {pid} /F /T → rc={r.returncode} {rc_line}")
+        time.sleep(2)
+    return not _port_listening_pids(DAEMON_PORT)
 
 
 def _kill_project_chrome():
@@ -108,6 +113,39 @@ Get-CimInstance Win32_Process -Filter "name = 'chrome.exe'" |
     ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}
 """
     _powershell(script, timeout=10)
+
+
+def _get_managed_chrome_pids() -> set[int]:
+    """Return PIDs of Chrome processes using bb-browser's managed user-data dir."""
+    # Normalize to all-backslashes so the substring match works against Chrome's
+    # CommandLine (which uses backslashes). MANAGED_USER_DATA_DIR may be mixed
+    # because the default "~/.bb-browser" contains a forward slash.
+    profile = os.path.normpath(MANAGED_USER_DATA_DIR).replace("'", "''")
+    script = f"""
+$profile = '{profile}'
+Get-CimInstance Win32_Process -Filter "name = 'chrome.exe'" |
+    Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains($profile) }} |
+    ForEach-Object {{ Write-Output $_.ProcessId }}
+"""
+    r = _powershell(script, timeout=10)
+    pids: set[int] = set()
+    for line in (r.stdout or "").splitlines():
+        s = line.strip()
+        if s.isdigit():
+            pids.add(int(s))
+    return pids
+
+
+def _kill_chrome_pids(pids: set[int]):
+    """Force-kill the given Chrome PIDs (with their process trees)."""
+    for pid in pids:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
 
 
 def _wait_daemon_ready(timeout: int) -> bool:
@@ -136,6 +174,12 @@ def ensure_daemon():
         _kill_stale_daemon_port_owner()
         _kill_project_chrome()
         time.sleep(3)
+        if _daemon_port_is_listening():
+            stuck = _port_listening_pids(DAEMON_PORT)
+            raise RuntimeError(
+                f"bb-browser daemon port {DAEMON_PORT} still held by PID(s) {sorted(stuck)} "
+                "after cleanup; cannot start daemon"
+            )
 
     # 第一次尝试
     _start_daemon()
@@ -144,7 +188,12 @@ def ensure_daemon():
 
     # 卡住了 → 清掉残留 daemon 端口和项目拉的 Chrome → 重试
     print("[!] Daemon stuck, cleaning up stale bb-browser daemon and Chrome...")
-    _kill_stale_daemon_port_owner()
+    if not _kill_stale_daemon_port_owner():
+        stuck = _port_listening_pids(DAEMON_PORT)
+        raise RuntimeError(
+            f"bb-browser daemon port {DAEMON_PORT} still held by PID(s) {sorted(stuck)} "
+            "after cleanup retry"
+        )
     _kill_project_chrome()
     time.sleep(3)
     _start_daemon()

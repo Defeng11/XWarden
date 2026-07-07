@@ -7,7 +7,13 @@ import sys
 from pathlib import Path
 
 from .config import Config
-from .monitor_bb import fetch_profile, _get_managed_chrome_pids, _kill_chrome_pids
+from .monitor_bb import (
+    fetch_profile,
+    _get_managed_chrome_pids,
+    _kill_chrome_pids,
+    _get_bb_browser_daemon_pids,
+    _kill_bb_browser_daemon_pids,
+)
 from .notifier import make_notifiers, notify_all
 from .storage import Storage
 
@@ -89,11 +95,19 @@ def _run() -> int:
         storage.save()
         return 0
     finally:
-        # 干掉 XWarden 启动的 managed Chrome, 不影响用户自己的 Chrome
+        # 干掉 XWarden 启动的 managed Chrome + bb-browser daemon,
+        # 不影响用户自己的 Chrome (不同 profile).
+        # 连 daemon 一起杀是防止 daemon CDP 断开后成僵尸、在 Windows
+        # 上撞 iphlpsvc 占用的 19824 端口 (bb-browser #217).
         chrome_pids = _get_managed_chrome_pids()
         if chrome_pids:
             print(f"[i] XWarden-managed Chrome PIDs (will kill): {sorted(chrome_pids)}")
             _kill_chrome_pids(chrome_pids)
+
+        daemon_pids = _get_bb_browser_daemon_pids()
+        if daemon_pids:
+            print(f"[i] bb-browser daemon PIDs (will kill): {sorted(daemon_pids)}")
+            _kill_bb_browser_daemon_pids(daemon_pids)
 
 
 if __name__ == "__main__":

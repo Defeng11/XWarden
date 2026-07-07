@@ -148,6 +148,40 @@ def _kill_chrome_pids(pids: set[int]):
         )
 
 
+def _get_bb_browser_daemon_pids() -> set[int]:
+    """Return PIDs of bb-browser daemon node processes."""
+    r = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process -Filter \"name = 'node.exe'\" | "
+            "Where-Object { $_.CommandLine -and $_.CommandLine.Contains('bb-browser') -and $_.CommandLine.Contains('daemon.js') } | "
+            "ForEach-Object { Write-Output $_.ProcessId }",
+        ],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=10,
+    )
+    pids: set[int] = set()
+    for line in (r.stdout or "").splitlines():
+        s = line.strip()
+        if s.isdigit():
+            pids.add(int(s))
+    return pids
+
+
+def _kill_bb_browser_daemon_pids(pids: set[int]):
+    """Force-kill bb-browser daemon PIDs (with their process trees)."""
+    for pid in pids:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+        )
+
+
 def _wait_daemon_ready(timeout: int) -> bool:
     """轮询 daemon status 直到 CDP connected=yes 或超时. 返回 True 表示 ready."""
     deadline = time.time() + timeout
